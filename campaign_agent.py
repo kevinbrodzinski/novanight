@@ -26,6 +26,23 @@ for spec in 'scs restgym/scs-api:1.0.0 18081' 'person restgym/person-controller-
 sleep 45
 for spec in 'scs 18081' 'person 18082' 'market 18083'; do set -- $spec; n=$1; p=$2; c=$(curl -sS -o "/tmp/body_$n" -w '%{http_code}' --max-time 3 "http://127.0.0.1:$p/error" || true); echo "TARGET=$n STATUS=$c"; if [ -f "/tmp/body_$n" ]; then echo -n "BODY_SHA256_$n="; sha256sum "/tmp/body_$n" | awk '{print $1}'; fi; docker ps -a --filter name="dusb04-$n" --format 'CONTAINER={{.ID}} STATUS={{.Status}} PORTS={{.Ports}}'; echo "LOGTAIL_$n"; docker logs --tail 25 "dusb04-$n" 2>&1 || true; done
 ''',
+'diagnose':r'''set -euo pipefail
+for spec in 'scs restgym/scs-api:1.0.0' 'person restgym/person-controller-api:1.0.0' 'market restgym/market-api:1.0.0'; do
+  set -- $spec; n=$1; img=$2
+  echo "=== $n IMAGE CONFIG ==="
+  docker image inspect "$img" --format 'ENTRYPOINT={{json .Config.Entrypoint}} CMD={{json .Config.Cmd}} EXPOSED={{json .Config.ExposedPorts}} ENV={{json .Config.Env}}'
+  echo "=== $n FILES ==="
+  docker run --rm --entrypoint /bin/sh "$img" -lc 'printf "PID1 candidates:\n"; ls -la /api 2>/dev/null || true; ls -la /infrastructure 2>/dev/null || true; find /api -maxdepth 2 -type f 2>/dev/null | head -80; printf "scripts:\n"; find / -maxdepth 3 \( -name "*.sh" -o -name "entrypoint*" \) 2>/dev/null | head -80' || true
+  echo "=== $n RUN STATE ==="
+  docker inspect "dusb04-$n" --format 'STATE={{json .State}} CONFIG={{json .Config}}' 2>/dev/null || true
+  echo "=== $n PROC ==="
+  docker top "dusb04-$n" -eo pid,ppid,args 2>/dev/null || true
+  echo "=== $n PORTS ==="
+  docker exec "dusb04-$n" /bin/sh -lc 'command -v ss >/dev/null && ss -lntp || (command -v netstat >/dev/null && netstat -lntp) || true; ps -ef' 2>/dev/null || true
+  echo "=== $n LOGS ==="
+  docker logs --tail 120 "dusb04-$n" 2>&1 || true
+done
+''',
 'cleanup':r'''set -euo pipefail
 for n in dusb04-carrier-probe dusb04-scs dusb04-person dusb04-market; do docker rm -f "$n" >/dev/null 2>&1 || true; done
 echo CLEANED
@@ -38,7 +55,7 @@ def run_mode(host,mode):
         STATE[mode]={'phase':'running','host':host,'started_at':time.time()}
     try:
         cp=subprocess.run(['ssh','-o','StrictHostKeyChecking=no','-o','UserKnownHostsFile=/dev/null','-o','ConnectTimeout=20','-i',PRIV,'root@'+host,'bash -s'],input=SCRIPTS[mode],text=True,capture_output=True,timeout=900)
-        STATE[mode]={'phase':'done','ok':cp.returncode==0,'rc':cp.returncode,'host':host,'started_at':STATE[mode]['started_at'],'finished_at':time.time(),'output':cp.stdout[-30000:],'stderr':cp.stderr[-12000:]}
+        STATE[mode]={'phase':'done','ok':cp.returncode==0,'rc':cp.returncode,'host':host,'started_at':STATE[mode]['started_at'],'finished_at':time.time(),'output':cp.stdout[-50000:],'stderr':cp.stderr[-12000:]}
     except Exception as e: STATE[mode]={'phase':'error','ok':False,'host':host,'error':repr(e),'finished_at':time.time()}
 
 class H(BaseHTTPRequestHandler):
